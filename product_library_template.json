@@ -1,0 +1,64 @@
+{
+  "products": [
+    {
+      "canonical_name": "Glycerol",
+      "aliases": [
+        "glycerol",
+        "GLY"
+      ],
+      "electrons": 0,
+      "stoich_factor": 1,
+      "carbon_number": 3,
+      "color": "#6b7280",
+      "is_reactant": true
+    },
+    {
+      "canonical_name": "Formic acid",
+      "aliases": [
+        "FA",
+        "formic acid"
+      ],
+      "electrons": 2.6666666667,
+      "stoich_factor": 1,
+      "carbon_number": 1,
+      "color": "#10b981",
+      "is_reactant": false
+    },
+    {
+      "canonical_name": "Oxalic acid",
+      "aliases": [
+        "OA",
+        "oxalic acid"
+      ],
+      "electrons": 14.6666666667,
+      "stoich_factor": 1,
+      "carbon_number": 2,
+      "color": "#7c3aed",
+      "is_reactant": false
+    },
+    {
+      "canonical_name": "Glycolic acid",
+      "aliases": [
+        "GA",
+        "glycolic acid"
+      ],
+      "electrons": 6.6666666667,
+      "stoich_factor": 1,
+      "carbon_number": 2,
+      "color": "#0ea5e9",
+      "is_reactant": false
+    },
+    {
+      "canonical_name": "Lactic acid",
+      "aliases": [
+        "LA",
+        "lactic acid"
+      ],
+      "electrons": 2,
+      "stoich_factor": 1,
+      "carbon_number": 3,
+      "color": "#ef4444",
+      "is_reactant": false
+    }
+  ]
+}
