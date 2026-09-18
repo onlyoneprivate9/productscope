@@ -6,8 +6,8 @@
         "glycerol",
         "GLY"
       ],
-      "electrons": 0,
-      "stoich_factor": 1,
+      "electrons": 0.0,
+      "stoich_factor": 1.0,
       "carbon_number": 3,
       "color": "#6b7280",
       "is_reactant": true
@@ -18,8 +18,8 @@
         "FA",
         "formic acid"
       ],
-      "electrons": 2.6666666667,
-      "stoich_factor": 1,
+      "electrons": 2.6666666666666665,
+      "stoich_factor": 1.0,
       "carbon_number": 1,
       "color": "#10b981",
       "is_reactant": false
@@ -30,8 +30,8 @@
         "OA",
         "oxalic acid"
       ],
-      "electrons": 14.6666666667,
-      "stoich_factor": 1,
+      "electrons": 7.333333333333333,
+      "stoich_factor": 1.0,
       "carbon_number": 2,
       "color": "#7c3aed",
       "is_reactant": false
@@ -42,8 +42,8 @@
         "GA",
         "glycolic acid"
       ],
-      "electrons": 6.6666666667,
-      "stoich_factor": 1,
+      "electrons": 3.3333333333333335,
+      "stoich_factor": 1.0,
       "carbon_number": 2,
       "color": "#0ea5e9",
       "is_reactant": false
@@ -54,10 +54,34 @@
         "LA",
         "lactic acid"
       ],
-      "electrons": 2,
-      "stoich_factor": 1,
+      "electrons": 2.0,
+      "stoich_factor": 1.0,
       "carbon_number": 3,
       "color": "#ef4444",
+      "is_reactant": false
+    },
+    {
+      "canonical_name": "Acetic acid",
+      "aliases": [
+        "AA",
+        "acetic acid"
+      ],
+      "electrons": 1.3333333333333333,
+      "stoich_factor": 1.0,
+      "carbon_number": 2,
+      "color": "#0ea5e9",
+      "is_reactant": false
+    },
+    {
+      "canonical_name": "Glyceric acid",
+      "aliases": [
+        "GLA",
+        "glyceric acid"
+      ],
+      "electrons": 4.0,
+      "stoich_factor": 1.0,
+      "carbon_number": 3,
+      "color": "#ec4899",
       "is_reactant": false
     }
   ]

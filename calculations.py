@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Dict, List, Optional
 
 
@@ -52,8 +53,8 @@ def compute_metrics(
     product_settings: Dict[str, dict],
     global_inputs: dict,
 ) -> dict:
-    dilution_factor = _to_float(global_inputs.get("dilution_factor"), 1.0)
-    global_electrolyte_volume_l = _to_float(global_inputs.get("electrolyte_volume_l"), 1.0)
+    dilution_factor = _to_float(global_inputs.get("dilution_factor", 1.0), math.nan)
+    global_electrolyte_volume_l = _to_float(global_inputs.get("electrolyte_volume_l", 1.0), math.nan)
     global_total_charge_c = _to_float(global_inputs.get("total_charge_c"), 0.0)
     global_initial_reactant_conc = _to_float(global_inputs.get("initial_reactant_concentration_mol_l"), 0.0)
     reactant_name = str(global_inputs.get("reactant_name", "Glycerol")).strip()
@@ -87,8 +88,8 @@ def compute_metrics(
 
     for sample, rows in by_sample.items():
         per_sample = sample_inputs.get(sample, {})
-        electrolyte_volume_l = _to_float(per_sample.get("electrolyte_volume_l"), global_electrolyte_volume_l)
-        total_charge_c = _to_float(per_sample.get("total_charge_c"), global_total_charge_c)
+        electrolyte_volume_l = _to_float(per_sample.get("electrolyte_volume_l", global_electrolyte_volume_l), math.nan)
+        total_charge_c = _to_float(per_sample.get("total_charge_c", global_total_charge_c), math.nan)
         initial_reactant_conc = _to_float(
             per_sample.get("initial_reactant_concentration_mol_l"),
             global_initial_reactant_conc,
@@ -101,7 +102,7 @@ def compute_metrics(
             raw_setting = settings.get(product_raw) or settings_ci.get(_norm_key(product_raw)) or ProductSetting(canonical_name=product_raw)
             product = raw_setting.canonical_name or product_raw
             canonical_setting = settings.get(product) or settings_ci.get(_norm_key(product)) or raw_setting
-            measured_conc = _to_float(row.get("amount_mol_l"), 0.0)
+            measured_conc = _to_float(row.get("amount_mol_l"), math.nan)
             adjusted_conc = measured_conc * dilution_factor
             moles = adjusted_conc * electrolyte_volume_l
             key = f"{product}||{row.get('signal','')}"
@@ -162,8 +163,38 @@ def compute_metrics(
             x["carbon_balance_pct"] = carbon_balance_pct
             computed_rows.append(x)
 
+        # BO objectives are sample totals; select targets by the product library.
+        targets = [x for x in enriched if not x["is_reactant"] and x["carbon_number"] in (2, 3)]
+        valid_amounts = (
+            math.isfinite(electrolyte_volume_l) and electrolyte_volume_l > 0
+            and math.isfinite(dilution_factor) and dilution_factor > 0
+            and all(math.isfinite(x["moles"]) and x["moles"] >= 0 for x in targets)
+        )
+        c2_c3_total_fe_pct = None
+        target_fes = [x["faradaic_efficiency_pct"] for x in targets]
+        if (valid_amounts and math.isfinite(total_charge_c) and total_charge_c > 0
+                and all(fe is not None and math.isfinite(fe) and fe >= 0 for fe in target_fes)):
+            total_fe = sum(target_fes)
+            if math.isfinite(total_fe):
+                c2_c3_total_fe_pct = total_fe
+
+        c2_c3_carbon_mmol = None
+        if valid_amounts:
+            target_carbon_moles = sum(x["carbon_number"] * x["moles"] for x in targets)
+            carbon_mmol = 1000.0 * target_carbon_moles
+            if math.isfinite(carbon_mmol):
+                c2_c3_carbon_mmol = carbon_mmol
+
+        objectives = {
+            "c2_c3_total_fe_pct": c2_c3_total_fe_pct,
+            "c2_c3_carbon_mmol": c2_c3_carbon_mmol,
+        }
+        for x in enriched:
+            x.update(objectives)
+
         sample_summaries.append(
             {
+                **objectives,
                 "sample": sample,
                 "reactant_name": reactant_name,
                 "total_charge_c": total_charge_c,
