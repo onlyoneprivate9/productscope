@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 import math
 from pathlib import Path
@@ -15,6 +16,7 @@ from tkinter import (
     colorchooser,
     filedialog,
     messagebox,
+    simpledialog,
 )
 from tkinter import ttk
 
@@ -33,9 +35,13 @@ except ImportError as exc:  # pragma: no cover - exercised only when deps are mi
 try:
     from .calculations import compute_metrics
     from .table_parser import parse_uploaded_table
+    from .pda_export import HEADERS as BO_OBJECTIVE_HEADERS, build_pda_rows, read_mea_details, normalize_mea_id, identity_mapping
+    from .measurement_grid import DEFAULT_PRODUCTS, grid_rows, calculation_rows, product_column
 except ImportError:
     from calculations import compute_metrics
     from table_parser import parse_uploaded_table
+    from pda_export import HEADERS as BO_OBJECTIVE_HEADERS, build_pda_rows, read_mea_details, normalize_mea_id, identity_mapping
+    from measurement_grid import DEFAULT_PRODUCTS, grid_rows, calculation_rows, product_column
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -43,6 +49,9 @@ DEFAULT_LIBRARY_FILE = BASE_DIR / "product_library_template.json"
 
 RESULT_HEADERS = [
     "sample",
+    "mea_id",
+    "hplc_repeat",
+    "mea_name",
     "product",
     "measured_concentration_mol_l",
     "adjusted_concentration_mol_l",
@@ -62,7 +71,6 @@ BO_OBJECTIVE_METRICS = {
     "C2/C3 total FE (%)": "c2_c3_total_fe_pct",
     "C2/C3 carbon produced (mmol-C)": "c2_c3_carbon_mmol",
 }
-BO_OBJECTIVE_HEADERS = ["sample", *BO_OBJECTIVE_METRICS.values()]
 
 PLOT_METRICS = {
     "Adjusted Concentration (mM)": ("adjusted_concentration_mol_l", "Adjusted concentration (mM)", 1000.0),
@@ -109,7 +117,8 @@ def _float_text(value: object, digits: int = 6) -> str:
     if value is None or value == "":
         return ""
     try:
-        return f"{float(value):.{digits}g}"
+        number = float(value)
+        return f"{number:.{digits}g}" if math.isfinite(number) else ""
     except (TypeError, ValueError):
         return ""
 
@@ -149,6 +158,7 @@ class EditableTable(ttk.Frame):
         self.rows: list[dict] = []
         self._editor = None
         self._on_change = None
+        self.readonly_columns = set()
 
         self.tree = ttk.Treeview(
             self,
@@ -180,11 +190,14 @@ class EditableTable(ttk.Frame):
         self.refresh()
 
     def refresh(self) -> None:
+        selected = self.tree.selection()
         self._close_editor(save=False)
         self.tree.delete(*self.tree.get_children())
         keys = [key for key, _, _ in self.columns]
         for idx, row in enumerate(self.rows):
             self.tree.insert("", "end", iid=str(idx), values=[row.get(key, "") for key in keys])
+        if selected and self.tree.exists(selected[0]):
+            self.tree.selection_set(selected[0])
 
     def selected_index(self) -> int | None:
         selection = self.tree.selection()
@@ -206,6 +219,8 @@ class EditableTable(ttk.Frame):
 
         column_index = int(column_id.replace("#", "")) - 1
         column_key = self.columns[column_index][0]
+        if column_key in self.readonly_columns:
+            return
         bbox = self.tree.bbox(row_id, column_id)
         if not bbox:
             return
@@ -226,12 +241,13 @@ class EditableTable(ttk.Frame):
         if not self._editor:
             return
         editor, row_index, column_key = self._editor
+        self._editor = None
+        value = editor.get()
+        editor.destroy()
         if save and row_index < len(self.rows):
-            self.rows[row_index][column_key] = editor.get()
+            self.rows[row_index][column_key] = value
             if self._on_change:
                 self._on_change()
-        editor.destroy()
-        self._editor = None
         self.refresh()
 
 
@@ -245,8 +261,19 @@ class ProductScopeApp:
         self.measurements: list[dict] = []
         self.sample_inputs: dict[str, dict] = {}
         self.product_library = self._load_default_library()
+        self.input_products = list(DEFAULT_PRODUCTS)
+        try:
+            saved = json.loads((BASE_DIR / 'input_preferences.json').read_text())
+            if isinstance(saved, list) and saved and all(isinstance(p, str) and p for p in saved):
+                self.input_products = list(dict.fromkeys(saved))
+        except (OSError, ValueError):
+            pass
         self.results: list[dict] = []
         self.sample_summaries: dict[str, dict] = {}
+        self.mea_names = {}
+        self.mea_details = {}
+        self.pda_start_number = StringVar(value="1")
+        self.pda_preview_note = StringVar(value="")
         # None follows all samples, while an empty set explicitly selects none.
         self.selected_samples: set[str] | None = None
 
@@ -279,6 +306,7 @@ class ProductScopeApp:
 
         self._configure_style()
         self._build_ui()
+        self.pda_start_number.trace_add("write", lambda *_: self._refresh_bo_preview())
         self._refresh_all()
 
     def _configure_style(self) -> None:
@@ -361,36 +389,47 @@ class ProductScopeApp:
         controls = ttk.Frame(self.data_tab)
         controls.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         ttk.Button(controls, text="Load CSV/XLSX", command=self.load_data_file, style="Primary.TButton").pack(side="left", padx=(0, 6))
-        ttk.Button(controls, text="Add Measurement", command=self.add_measurement).pack(side="left", padx=6)
-        ttk.Button(controls, text="Delete Measurement", command=self.delete_measurement).pack(side="left", padx=6)
-        ttk.Button(controls, text="Clear Measurements", command=self.clear_measurements).pack(side="left", padx=6)
-        ttk.Label(controls, text="Dilution coefficient").pack(side="left", padx=(24, 5))
-        ttk.Entry(controls, textvariable=self.dilution_factor, width=8).pack(side="left")
-        ttk.Label(controls, text="Reactant").pack(side="left", padx=(14, 5))
-        ttk.Entry(controls, textvariable=self.reactant_name, width=16).pack(side="left")
+        ttk.Button(controls, text="Export Input CSV", command=self.export_input_csv).pack(side="left", padx=4)
+        ttk.Button(controls, text="Add Sample", command=self.add_measurement).pack(side="left", padx=4)
+        ttk.Button(controls, text="Add HPLC Repeat", command=self.add_hplc_repeat).pack(side="left", padx=4)
+        ttk.Button(controls, text="Products…", command=self.choose_input_products).pack(side="left", padx=4)
+        ttk.Button(controls, text="Delete Sample", command=self.delete_measurement).pack(side="left", padx=4)
+        ttk.Button(controls, text="Clear", command=self.clear_measurements).pack(side="left", padx=4)
 
-        ttk.Label(self.data_tab, text="Measurements", style="Header.TLabel").grid(row=1, column=0, sticky="w")
+        settings = ttk.Frame(self.data_tab)
+        settings.grid(row=1, column=0, sticky="ew", pady=4)
+        ttk.Label(settings, text="Measurements — concentrations in mol/L", style="Header.TLabel").pack(side="left")
+        ttk.Label(settings, text="Dilution coefficient").pack(side="left", padx=(20, 5))
+        ttk.Entry(settings, textvariable=self.dilution_factor, width=8).pack(side="left")
+        ttk.Label(settings, text="Reactant").pack(side="left", padx=(14, 5))
+        ttk.Entry(settings, textvariable=self.reactant_name, width=16).pack(side="left")
         self.measurement_table = EditableTable(
             self.data_tab,
             [
-                ("sample", "Sample", 180),
-                ("product", "Product", 160),
-                ("amount_mol_l", "Amount [mol/L]", 130),
+                ("mea_id", "Sample (MEA ID)", 180),
+                ("hplc_repeat", "HPLC Repeat", 110),
+                *[(p, p, 150) for p in self.input_products],
             ],
             height=10,
         )
         self.measurement_table.grid(row=2, column=0, sticky="nsew", pady=(4, 12))
         self.measurement_table.set_on_change(self._measurement_table_changed)
+        self.measurement_table.tree.bind('<Control-v>', self.paste_measurements)
+        self.measurement_table.tree.bind('<Command-v>', self.paste_measurements)
+        self.measurement_table.tree.bind('<Button-1>', self._remember_paste_cell, add='+')
 
         sample_controls = ttk.Frame(self.data_tab)
         sample_controls.grid(row=3, column=0, sticky="ew")
         ttk.Label(sample_controls, text="Per-sample electrolysis inputs", style="Header.TLabel").pack(side="left")
         ttk.Button(sample_controls, text="Refresh Samples", command=self._sync_sample_inputs).pack(side="right")
+        ttk.Button(sample_controls, text="Load MEA details from master", command=self.load_master_details).pack(side="right", padx=6)
 
         self.sample_table = EditableTable(
             self.data_tab,
             [
-                ("sample", "Sample", 180),
+                ("mea_id", "Sample (MEA ID)", 170),
+                ("hplc_repeat", "HPLC Repeat", 100),
+                ("mea_name", "Name", 240),
                 ("total_charge_c", "Total Charge Q [C]", 150),
                 ("electrolyte_volume_l", "Electrolyte Volume [L]", 160),
                 ("initial_reactant_concentration_mol_l", "Initial Reactant Conc. [mol/L]", 200),
@@ -399,6 +438,7 @@ class ProductScopeApp:
         )
         self.sample_table.grid(row=4, column=0, sticky="nsew", pady=(4, 0))
         self.sample_table.set_on_change(self._sample_table_changed)
+        self.sample_table.readonly_columns.add("sample")
 
     def _build_library_tab(self) -> None:
         self.library_tab.grid_columnconfigure(0, weight=1)
@@ -444,6 +484,7 @@ class ProductScopeApp:
             self.results_tab,
             [
                 ("sample", "Sample", 150),
+                ("hplc_repeat", "HPLC Repeat", 110),
                 ("product", "Product", 150),
                 ("adjusted_concentration_mol_l", "Adj. Conc. [mol/L]", 150),
                 ("moles", "Moles", 120),
@@ -458,18 +499,22 @@ class ProductScopeApp:
 
         bo_controls = ttk.Frame(self.results_tab)
         bo_controls.grid(row=2, column=0, sticky="ew", pady=(10, 4))
-        ttk.Label(bo_controls, text="BO objectives — maximise C2/C3 FE and carbon produced.").pack(side="left")
+        ttk.Label(bo_controls, text="BO objectives — maximise C2/C3 FE and carbon produced.").grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Label(bo_controls, text="First PDA number (1–999):").grid(row=1, column=0, sticky="w", pady=6)
+        self.pda_number_control = ttk.Spinbox(bo_controls, from_=1, to=999, textvariable=self.pda_start_number, width=8)
+        self.pda_number_control.grid(row=1, column=1, sticky="w", padx=8)
+        bo_controls.columnconfigure(2, weight=1)
         ttk.Button(bo_controls, text="Export BO Objectives CSV", command=self.export_bo_objectives_csv,
-                   style="Primary.TButton").pack(side="right")
+                   style="Primary.TButton").grid(row=1, column=2, sticky="e")
         self.bo_objectives_table = EditableTable(
             self.results_tab,
-            [("sample", "Sample", 150),
-             ("c2_c3_total_fe_pct", "C2/C3 total FE [%]", 200),
-             ("c2_c3_carbon_mmol", "C2/C3 carbon produced [mmol-C]", 260)],
+            [(key, key, 260 if key.startswith("BO ") else 150) for key in BO_OBJECTIVE_HEADERS],
             height=5,
         )
         self.bo_objectives_table.grid(row=3, column=0, sticky="nsew")
         self.bo_objectives_table.tree.unbind("<Double-1>")
+        ttk.Label(self.results_tab, textvariable=self.pda_preview_note, wraplength=1000).grid(
+            row=4, column=0, sticky="w")
 
     def _build_figure_tab(self) -> None:
         self.figure_tab.grid_columnconfigure(0, weight=1)
@@ -603,20 +648,30 @@ class ProductScopeApp:
         self._refresh_summary_cards()
         self.draw_plot()
 
+    def _set_product_columns(self, products):
+        self.input_products = list(dict.fromkeys(products))
+        table = self.measurement_table
+        table.columns = [("mea_id", "Sample (MEA ID)", 180),
+                         ("hplc_repeat", "HPLC Repeat", 110),
+                         *[(p, p, 150) for p in self.input_products]]
+        table.tree.configure(columns=[key for key, _, _ in table.columns])
+        for key, label, width in table.columns:
+            table.tree.heading(key, text=label)
+            table.tree.column(key, width=width, minwidth=90, stretch=True)
+
     def _display_measurements(self) -> list[dict]:
-        return [
-            {
-                "sample": row.get("sample", ""),
-                "product": row.get("product", ""),
-                "amount_mol_l": _float_text(row.get("amount_mol_l"), 8),
-            }
-            for row in self.measurements
-        ]
+        products = list(dict.fromkeys(product_column(r) for r in self.measurements))
+        if products:
+            self._set_product_columns(products)
+        return grid_rows(self.measurements, self.sample_inputs, self.input_products)
 
     def _display_sample_inputs(self) -> list[dict]:
         return [
             {
                 "sample": sample,
+                "mea_id": values.get("mea_id", sample),
+                "hplc_repeat": values.get("hplc_repeat", "repeat1"),
+                "mea_name": values.get("mea_name") or self.mea_names.get(values.get("mea_id", sample), ""),
                 "total_charge_c": _float_text(values.get("total_charge_c"), 8),
                 "electrolyte_volume_l": _float_text(values.get("electrolyte_volume_l"), 8),
                 "initial_reactant_concentration_mol_l": _float_text(
@@ -642,42 +697,71 @@ class ProductScopeApp:
             )
         return out
 
-    def _measurement_table_changed(self) -> None:
-        self.measurements = [
-            {
-                "sample": (row.get("sample") or "Sample").strip(),
-                "signal": "",
-                "product": (row.get("product") or "Product").strip(),
-                "amount_mol_l": _to_float(row.get("amount_mol_l"), math.nan),
-            }
-            for row in self.measurement_table.rows
-        ]
+    def _apply_sample_inputs(self, inputs):
+        try:
+            renamed, updated = identity_mapping(inputs)
+        except ValueError as exc:
+            messagebox.showerror("Duplicate or invalid sample", str(exc))
+            self.sample_table.load_rows(self._display_sample_inputs())
+            self.measurement_table.load_rows(self._display_measurements())
+            return False
+        self.sample_inputs = updated
+        for rows in (self.measurements, self.results, self.measurement_table.rows):
+            for row in rows:
+                row["sample"] = renamed.get(row["sample"], row["sample"])
+        self.sample_summaries = {
+            renamed.get(key, key): dict(summary, sample=renamed.get(key, key))
+            for key, summary in self.sample_summaries.items()
+        }
+        if self.selected_samples is not None:
+            self.selected_samples = {renamed.get(key, key) for key in self.selected_samples}
+        self.sample_table.load_rows(self._display_sample_inputs())
+        for row in self.measurement_table.rows:
+            cfg = updated.get(row["sample"], {})
+            row["mea_id"] = cfg.get("mea_id", row["sample"])
+            row["hplc_repeat"] = cfg.get("hplc_repeat", "repeat1")
+        self.measurement_table.refresh()
+        self._refresh_sample_filter()
+        self._refresh_results_table()
+        self.draw_plot()
+        return True
+
+    def _measurement_table_changed(self) -> bool:
+        inputs = {key: dict(cfg) for key, cfg in self.sample_inputs.items()}
+        try:
+            calculation_rows(self.measurement_table.rows, self.input_products)
+        except ValueError as exc:
+            messagebox.showerror("Invalid concentration", str(exc))
+            return False
+        for row in self.measurement_table.rows:
+            sample = row["sample"]
+            cfg = inputs.setdefault(sample, {})
+            mea = normalize_mea_id(row.get("mea_id", sample))
+            if mea != cfg.get("mea_id", sample):
+                cfg["mea_name"] = self.mea_names.get(mea, "")
+            cfg["mea_id"] = mea
+            cfg["hplc_repeat"] = row.get("hplc_repeat", "repeat1")
+        if not self._apply_sample_inputs(inputs):
+            return False
+        self.measurements = calculation_rows(self.measurement_table.rows, self.input_products)
         self._sync_sample_inputs()
+        return True
 
     def _sample_table_changed(self) -> None:
-        next_inputs = {}
+        inputs = {}
         for row in self.sample_table.rows:
-            sample = (row.get("sample") or "").strip()
-            if not sample:
-                continue
-            next_inputs[sample] = {
-                "total_charge_c": _to_float(row.get("total_charge_c"), 0.0),
-                "electrolyte_volume_l": _to_float(row.get("electrolyte_volume_l"), math.nan),
-                "initial_reactant_concentration_mol_l": _to_float(
-                    row.get("initial_reactant_concentration_mol_l"), 0.1
-                ),
+            sample = row["sample"]
+            inputs[sample] = {
+                "mea_id": normalize_mea_id(row.get("mea_id")),
+                "hplc_repeat": (row.get("hplc_repeat") or "").strip(),
+                "mea_name": (row.get("mea_name") or "").strip(),
+                **{key: _to_float(row.get(key), math.nan) for key in (
+                    "total_charge_c", "electrolyte_volume_l", "initial_reactant_concentration_mol_l")},
             }
-        old_to_new = {}
-        old_samples = list(self.sample_inputs)
-        for idx, sample in enumerate(next_inputs):
-            if idx < len(old_samples) and old_samples[idx] != sample:
-                old_to_new[old_samples[idx]] = sample
-        for row in self.measurements:
-            if row.get("sample") in old_to_new:
-                row["sample"] = old_to_new[row["sample"]]
-        self.sample_inputs = next_inputs
-        self._refresh_sample_filter()
-        self.measurement_table.load_rows(self._display_measurements())
+            mea = inputs[sample]["mea_id"]
+            if mea != self.sample_inputs.get(sample, {}).get("mea_id", sample):
+                inputs[sample]["mea_name"] = self.mea_names.get(mea, "")
+        self._apply_sample_inputs(inputs)
 
     def _library_table_changed(self) -> None:
         products = []
@@ -707,14 +791,12 @@ class ProductScopeApp:
             if sample and sample not in samples:
                 samples.append(sample)
         self.sample_inputs = {
-            sample: self.sample_inputs.get(
-                sample,
-                {
-                    "total_charge_c": 0.0,
-                    "electrolyte_volume_l": 0.05,
-                    "initial_reactant_concentration_mol_l": 0.1,
-                },
-            )
+            sample: {
+                "total_charge_c": 0.0,
+                "electrolyte_volume_l": 0.05,
+                "initial_reactant_concentration_mol_l": 0.1,
+                **self.sample_inputs.get(sample, {}),
+            }
             for sample in samples
         }
         self.sample_table.load_rows(self._display_sample_inputs())
@@ -798,7 +880,8 @@ class ProductScopeApp:
         for row in self.results:
             formatted.append(
                 {
-                    "sample": row.get("sample", ""),
+                    "sample": self.sample_inputs.get(row["sample"], {}).get("mea_id", row["sample"]),
+                    "hplc_repeat": self.sample_inputs.get(row["sample"], {}).get("hplc_repeat", "repeat1"),
                     "product": row.get("product", ""),
                     "adjusted_concentration_mol_l": _float_text(row.get("adjusted_concentration_mol_l"), 8),
                     "moles": _float_text(row.get("moles"), 8),
@@ -809,11 +892,21 @@ class ProductScopeApp:
                 }
             )
         self.results_table.load_rows(formatted)
-        self.bo_objectives_table.load_rows([
-            {"sample": summary["sample"],
-             **{key: _float_text(summary.get(key), 6) for key in BO_OBJECTIVE_METRICS.values()}}
-            for summary in self.sample_summaries.values()
-        ])
+        self._refresh_bo_preview()
+
+    def _refresh_bo_preview(self) -> None:
+        try:
+            rows = build_pda_rows(self.sample_summaries.values(), self.sample_inputs,
+                                  self.pda_start_number.get())
+        except ValueError as exc:
+            self.bo_objectives_table.load_rows([])
+            self.pda_preview_note.set(str(exc))
+            return
+        for row in rows:
+            for key in BO_OBJECTIVE_HEADERS[-2:]:
+                row[key] = _float_text(row[key], 6)
+        self.bo_objectives_table.load_rows(rows)
+        self.pda_preview_note.set("PDA numbers follow export order. Set the starting number for each batch.")
 
     def _refresh_summary_cards(self) -> None:
         data = self._plot_data()
@@ -858,23 +951,71 @@ class ProductScopeApp:
             return
         self.measurements = parsed.get("rows", [])
         self.sample_inputs = parsed.get("sample_inputs", {}) or {}
+        if parsed.get("dilution_factor") is not None:
+            self.dilution_factor.set(parsed["dilution_factor"])
+        self._set_product_columns(parsed.get("products") or list(dict.fromkeys(product_column(r) for r in self.measurements)) or self.input_products)
+        self.results = []
+        self.sample_summaries = {}
+        self.selected_samples = None
         self._sync_sample_inputs()
         self.measurement_table.load_rows(self._display_measurements())
+        self._refresh_results_table()
+        self.draw_plot()
         self._refresh_summary_cards()
         self.status_text.set(f"Loaded {len(self.measurements)} rows from {file_path.name}.")
 
-    def add_measurement(self) -> None:
-        self.measurements.append({"sample": "Sample", "signal": "", "product": "Product", "amount_mol_l": 0.0})
+    def _append_sample(self, mea, repeat, cfg=None):
+        mea = normalize_mea_id(mea)
+        inputs = {key: dict(value) for key, value in self.sample_inputs.items()}
+        temporary = "__new_sample__"
+        inputs[temporary] = {"total_charge_c": None, "electrolyte_volume_l": None,
+            "initial_reactant_concentration_mol_l": None,
+            **(cfg or self.mea_details.get(mea, {})), "mea_id": mea, "hplc_repeat": repeat}
+        try:
+            renamed, updated = identity_mapping(inputs)
+        except ValueError as exc:
+            messagebox.showerror("Cannot add sample", str(exc))
+            return
+        key = renamed[temporary]
+        self.sample_inputs = updated
+        self.measurements.extend(calculation_rows([
+            {"sample": key, "mea_id": mea, "hplc_repeat": repeat}], self.input_products))
         self._sync_sample_inputs()
         self.measurement_table.load_rows(self._display_measurements())
+        index = str(len(self.measurement_table.rows) - 1)
+        self.measurement_table.tree.selection_set(index)
+        self.measurement_table.tree.see(index)
+
+    def add_measurement(self) -> None:
+        self.measurement_table._close_editor(save=True)
+        mea = simpledialog.askstring("Add Sample", "Sample (MEA ID), e.g. P005-MEA-014:", parent=self.root)
+        if mea and mea.strip():
+            self._append_sample(mea, "repeat1")
+
+    def add_hplc_repeat(self) -> None:
+        self.measurement_table._close_editor(save=True)
+        index = self.measurement_table.selected_index()
+        if index is None:
+            messagebox.showinfo("Select a sample", "Select the sample to repeat first.")
+            return
+        cfg = self.sample_inputs[self.measurement_table.rows[index]["sample"]]
+        mea = cfg["mea_id"]
+        repeats = [int(c.get("hplc_repeat", "repeat1")[6:]) for c in self.sample_inputs.values() if c.get("mea_id") == mea]
+        self._append_sample(mea, f"repeat{max(repeats) + 1}", cfg)
 
     def delete_measurement(self) -> None:
         idx = self.measurement_table.selected_index()
         if idx is None:
             return
-        self.measurements.pop(idx)
+        sample = self.measurement_table.rows[idx]["sample"]
+        self.measurements = [r for r in self.measurements if r["sample"] != sample]
+        self.sample_inputs.pop(sample, None)
+        self.results = [r for r in self.results if r["sample"] != sample]
+        self.sample_summaries.pop(sample, None)
         self._sync_sample_inputs()
         self.measurement_table.load_rows(self._display_measurements())
+        self._refresh_results_table()
+        self.draw_plot()
 
     def clear_measurements(self) -> None:
         self.measurements = []
@@ -884,6 +1025,91 @@ class ProductScopeApp:
         self.selected_samples = None
         self._refresh_all()
         self.status_text.set("Measurements cleared.")
+
+    def export_input_csv(self) -> None:
+        self.measurement_table._close_editor(save=True)
+        self.sample_table._close_editor(save=True)
+        if not self._measurement_table_changed():
+            return
+        path = filedialog.asksaveasfilename(title="Export editable input table",
+            defaultextension=".csv", filetypes=[("CSV files", "*.csv")], initialfile="productscope_inputs.csv")
+        if not path:
+            return
+        metadata = ['mea_name', 'total_charge_c', 'electrolyte_volume_l',
+                    'initial_reactant_concentration_mol_l']
+        headers = ['sample', 'hplc_repeat', *self.input_products, *metadata, 'dilution_factor']
+        with Path(path).open('w', newline='', encoding='utf-8-sig') as handle:
+            writer = csv.DictWriter(handle, fieldnames=headers)
+            writer.writeheader()
+            for row in self.measurement_table.rows:
+                cfg = self.sample_inputs[row['sample']]
+                values = {key: cfg.get(key, '') if key == 'mea_name' else _float_text(cfg.get(key), 15) for key in metadata}
+                writer.writerow({'sample': row['mea_id'], 'hplc_repeat': row['hplc_repeat'],
+                    **{p: row.get(p, '') for p in self.input_products}, **values,
+                    'dilution_factor': self.dilution_factor.get()})
+        self.status_text.set(f"Saved editable input table to {Path(path).name}.")
+
+    def choose_input_products(self) -> None:
+        self.measurement_table._close_editor(save=True)
+        choices = list(dict.fromkeys([*self.input_products,
+            *[p['canonical_name'] for p in self.product_library['products']]]))
+        dialog = Toplevel(self.root)
+        dialog.title('Product columns')
+        variables = {p: BooleanVar(dialog, value=p in self.input_products) for p in choices}
+        ttk.Label(dialog, text='Choose the products measured in each sample.').pack(padx=16, pady=10)
+        for p, variable in variables.items():
+            ttk.Checkbutton(dialog, text=p, variable=variable).pack(anchor='w', padx=16)
+        def apply():
+            selected = [p for p, variable in variables.items() if variable.get()]
+            if not selected:
+                messagebox.showwarning('Select products', 'Choose at least one product.', parent=dialog)
+                return
+            rows = self.measurement_table.rows
+            if any(str(row.get(p, '')).strip() for row in rows for p in self.input_products if p not in selected):
+                messagebox.showwarning('Product has measurements', 'Clear the concentration cells before removing that product column.', parent=dialog)
+                return
+            self._set_product_columns(selected)
+            self.measurements = calculation_rows(rows, selected)
+            self.measurement_table.load_rows(grid_rows(self.measurements, self.sample_inputs, selected))
+            try:
+                (BASE_DIR / 'input_preferences.json').write_text(json.dumps(selected, indent=2))
+            except OSError as exc:
+                messagebox.showwarning('Preferences not saved', str(exc), parent=dialog)
+            self.results = []
+            self.sample_summaries = {}
+            self._refresh_results_table()
+            self.draw_plot()
+            dialog.destroy()
+        ttk.Button(dialog, text='Apply', command=apply).pack(pady=12)
+
+    def _remember_paste_cell(self, event):
+        row = self.measurement_table.tree.identify_row(event.y)
+        column = self.measurement_table.tree.identify_column(event.x)
+        if row and column:
+            self._paste_cell = (int(row), int(column[1:]) - 1)
+
+    def paste_measurements(self, _event=None):
+        self.measurement_table._close_editor(save=True)
+        start_row, start_col = getattr(self, '_paste_cell', (0, 2))
+        try:
+            block = list(csv.reader(io.StringIO(self.root.clipboard_get()), delimiter='\t'))
+            rows = [dict(r) for r in self.measurement_table.rows]
+            columns = [key for key, _, _ in self.measurement_table.columns]
+            if start_row + len(block) > len(rows) or any(start_col + len(line) > len(columns) for line in block):
+                raise ValueError('The pasted block does not fit. Add sample rows first, then click the first destination cell.')
+            for i, line in enumerate(block):
+                for j, value in enumerate(line):
+                    rows[start_row + i][columns[start_col + j]] = value.strip()
+            calculation_rows(rows, self.input_products)
+            candidate = {r['sample']: {**self.sample_inputs[r['sample']], 'mea_id': r['mea_id'],
+                'hplc_repeat': r['hplc_repeat']} for r in rows}
+            identity_mapping(candidate)
+        except Exception as exc:
+            messagebox.showerror('Cannot paste', str(exc))
+            return 'break'
+        self.measurement_table.load_rows(rows)
+        self._measurement_table_changed()
+        return 'break'
 
     def load_library_file(self) -> None:
         path = filedialog.askopenfilename(
@@ -1001,7 +1227,13 @@ class ProductScopeApp:
         return settings
 
     def run_calculations(self) -> None:
-        self._measurement_table_changed()
+        self.results = []
+        self.sample_summaries = {}
+        self.sample_table._close_editor(save=True)
+        self.measurement_table._close_editor(save=True)
+        self._sample_table_changed()
+        if not self._measurement_table_changed():
+            return
         self._sample_table_changed()
         if not self.measurements:
             messagebox.showwarning("No measurements", "Load or add measurements before calculating.")
@@ -1028,6 +1260,10 @@ class ProductScopeApp:
         sample_cfg = self.sample_inputs.get(row.get("sample"), {})
         return {
             **row,
+            "sample": sample_cfg.get("mea_id", row.get("sample", "")),
+            "mea_id": sample_cfg.get("mea_id", row.get("sample", "")),
+            "hplc_repeat": sample_cfg.get("hplc_repeat", "repeat1"),
+            "mea_name": sample_cfg.get("mea_name", ""),
             "total_charge_c": sample_cfg.get("total_charge_c", ""),
             "electrolyte_volume_l": sample_cfg.get("electrolyte_volume_l", ""),
             "initial_reactant_concentration_mol_l": sample_cfg.get(
@@ -1036,6 +1272,7 @@ class ProductScopeApp:
         }
 
     def export_results_csv(self) -> None:
+        self.run_calculations()
         if not self.results:
             messagebox.showwarning("No results", "Run calculations before exporting.")
             return
@@ -1056,8 +1293,17 @@ class ProductScopeApp:
         self.status_text.set(f"Exported results to {Path(path).name}.")
 
     def export_bo_objectives_csv(self) -> None:
+        # Recompute from the current inputs so edited repeats/charge cannot be
+        # paired with objective values left over from an earlier analysis.
+        self.run_calculations()
         if not self.sample_summaries:
             messagebox.showwarning("No results", "Run calculations before exporting BO objectives.")
+            return
+        try:
+            rows = build_pda_rows(self.sample_summaries.values(), self.sample_inputs,
+                                  self.pda_start_number.get())
+        except ValueError as exc:
+            messagebox.showerror("Cannot export PDA report", str(exc))
             return
         path = filedialog.asksaveasfilename(
             title="Export BO objectives CSV",
@@ -1070,9 +1316,54 @@ class ProductScopeApp:
         with Path(path).open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=BO_OBJECTIVE_HEADERS)
             writer.writeheader()
-            for summary in self.sample_summaries.values():
-                writer.writerow({key: summary.get(key) for key in BO_OBJECTIVE_HEADERS})
+            writer.writerows(rows)
         self.status_text.set(f"Exported BO objectives to {Path(path).name}.")
+
+    def load_master_details(self) -> None:
+        path = filedialog.askopenfilename(title="Select master register",
+                                          filetypes=[("Excel workbook", "*.xlsx")])
+        if not path:
+            return
+        try:
+            details = read_mea_details(path)
+        except Exception as exc:
+            messagebox.showerror("Master lookup failed", str(exc))
+            return
+        self.sample_table._close_editor(save=True)
+        self._sample_table_changed()
+        self.mea_details = details
+        self.mea_names = {mea: cfg["mea_name"] for mea, cfg in details.items()}
+        matched = 0
+        missing = []
+        incomplete = []
+        for sample, cfg in self.sample_inputs.items():
+            mea = normalize_mea_id(cfg.get("mea_id", sample))
+            cfg["mea_id"] = mea
+            if mea in details:
+                cfg.update(details[mea])
+                matched += 1
+                if any(value is None for value in details[mea].values()):
+                    incomplete.append(mea)
+            else:
+                missing.append(mea)
+        self.sample_table.load_rows(self._display_sample_inputs())
+        self._sample_table_changed()
+        # Existing objective values no longer describe the newly loaded inputs.
+        self.results = []
+        self.sample_summaries = {}
+        self._refresh_results_table()
+        self._refresh_summary_cards()
+        self.draw_plot()
+        notice = f"Loaded MEA details for {matched} samples from {Path(path).name}. Run Analysis to update results."
+        if missing:
+            notice += " Not found (inputs kept): " + ", ".join(dict.fromkeys(missing)) + "."
+        if incomplete:
+            notice += " Missing or invalid master values left blank: " + ", ".join(dict.fromkeys(incomplete)) + "."
+        self.status_text.set(notice)
+        if missing:
+            messagebox.showwarning("MEA IDs not found", "These samples were not found in the master register:\n"
+                + "\n".join(dict.fromkeys(missing))
+                + "\n\nUse the registered MEA ID without suffixes such as -failed or -2. Enter HPLC repeats in HPLC Repeat.")
 
     def _color_map(self) -> dict[str, str]:
         color_map = {}
@@ -1120,6 +1411,11 @@ class ProductScopeApp:
             "products": products,
             "matrix": matrix,
         }
+
+    def _sample_labels(self, samples):
+        ids = [self.sample_inputs.get(s, {}).get("mea_id", s) for s in samples]
+        return [f"{mea} [{self.sample_inputs[s].get('hplc_repeat', 'repeat1')}]"
+                if ids.count(mea) > 1 else mea for s, mea in zip(samples, ids)]
 
     def _overlay_values(self, samples: list[str]) -> list[float]:
         metric = self.plot_right_metric.get()
@@ -1310,7 +1606,7 @@ class ProductScopeApp:
             bottoms = [bottom + value for bottom, value in zip(bottoms, values)]
 
         axis.set_xticks(range(len(samples)))
-        axis.set_xticklabels(samples)
+        axis.set_xticklabels(self._sample_labels(samples))
         if len(samples) == 1:
             axis.set_xlim(-0.65, 0.65)
         else:

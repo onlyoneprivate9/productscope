@@ -117,6 +117,39 @@ Constant:
 
 ## C2/C3 BO Objectives
 
+### Entering measurements
+
+The Measurements table has one row per **MEA ID + HPLC Repeat**, with product
+concentrations across columns. All concentration cells use **mol/L**.
+
+- **Add Sample** asks for the MEA ID and creates a blank `repeat1` row. If its
+  details are already loaded from the master, they are filled automatically.
+- **Add HPLC Repeat** uses the selected sample, picks the next repeat number,
+  copies its electrolysis inputs, and leaves all concentrations blank.
+- Double-click to edit one cell. To paste an Excel block, first add enough sample
+  rows, single-click its top-left destination cell, then press **Cmd+V** on Mac
+  or **Ctrl+V** on Windows. Paste contains values only, without a header row.
+- **Products…** chooses columns from the product library and saves the selection
+  for future sessions. Clear values before removing a populated product column.
+- **Export Input CSV** saves the same wide layout, plus electrolysis inputs,
+  name and dilution factor. Reopen it with **Load CSV/XLSX** to continue editing.
+  With no samples, it exports an empty input template with the chosen columns.
+- Existing product-per-row CSV/XLSX files and Results CSV files still load;
+  their products become columns. Detector signals, where present, get separate
+  columns such as `GA | UV`.
+
+A blank cell means **not entered**, while `0` means a measured zero. Missing
+target-product concentrations leave the associated BO objective unavailable.
+The detailed Results CSV and PDA BO report retain their respective formats.
+
+Example input CSV:
+
+```csv
+sample,hplc_repeat,Glycerol,Glyceric acid,Glycolic acid,Formic acid,Oxalic acid
+P005-MEA-013,repeat1,0.022,0,0,0,0.00016
+P005-MEA-013,repeat2,,,,,
+```
+
 Both objectives are maximised. Products are included
 when their configured carbon number is 2 or 3 and they are not flagged as reactants.
 Aliases and signals follow the same aggregation as the existing product metrics.
@@ -133,10 +166,62 @@ It is distinct from reactant-depletion carbon conversion and the existing carbon
 balance. At the same product concentrations, doubling electrolyte volume doubles
 this objective. Reactants, including unreacted glycerol, are excluded.
 
-After **Run Analysis**, the Results tab shows a BO objectives table. **Export BO
-Objectives CSV** exports all analysed samples once each, with columns `sample`,
-`c2_c3_total_fe_pct`, and `c2_c3_carbon_mmol`. FE is in percent; carbon amount is in
-mmol-C. The regular Results CSV also includes
+After **Run Analysis**, the Results tab previews the PDA report. **Export BO
+Objectives CSV** recalculates the current inputs and exports one row per HPLC
+sample, in input order, with columns:
+
+`ID`, `Name`, `Project`, `Number`, `Repeat`, `Category`, `Label`, `Components`,
+`BO 1 - C2/C3 FE(%)`, `BO 2 - C2/C3 carbon produced (mmol-C)`.
+
+In **Per-sample electrolysis inputs**, enter the corresponding register ID in
+**Sample (MEA ID)**, for example `P005-MEA-009`. MEA ID + HPLC Repeat is the
+measurement identity throughout the app; there is no separate generated identity. Enter
+**HPLC Repeat** as `repeat1`, `repeat2`, etc.; it is independent of the MEA's
+electrolysis repeat. Two rows cannot have the same MEA ID and HPLC repeat.
+Editing Sample (MEA ID) or HPLC Repeat updates the corresponding measurement
+rows, results, figure labels, selection and exports immediately, without merging
+injections or changing concentration values. Duplicate combinations are rejected
+and the previous values are restored. Results show MEA ID and repeat separately;
+figures append the repeat only when more than one displayed sample shares an MEA ID.
+IDs such as `P05-MEA-1` are normalized to `P005-MEA-001`. Extra suffixes such
+as `-failed` or `-2` are not removed automatically; use the registered MEA ID
+and the separate HPLC Repeat field. Unmatched IDs are listed when loading the master.
+
+For imports, use the MEA ID in `sample` and add a `repeat` or `hplc_repeat`
+column. Legacy files with distinct source labels plus `mea_id` are also accepted;
+the source labels are replaced by MEA ID + HPLC Repeat when loaded. Without a
+repeat column, product rows under the same sample are treated as one analysis.
+The regular Results CSV writes the current MEA ID in `sample` and stores the
+HPLC repeat separately, so reloading preserves the same measurement identity.
+
+Use **Load MEA details from master** to select `P005_GOR.xlsx`. It matches each
+Sample (MEA ID) against `ExperimentPlan` and fills all four fields together:
+
+- **Name** from `Name`.
+- **Electrolyte Volume [L]** from `Electrolyte volume(L)`.
+- **Total Charge Q [C]** = `Applied current (mA)` × `Applied current duration(s)` / 1000.
+- **Initial Reactant Conc. [mol/L]** from `Concentration of glycerol (M)`.
+
+Loading replaces these fields for matched samples, including all HPLC repeats
+of a measurement. You can edit the values afterwards. The charge is calculated
+from the registered constant current and duration; enter the measured integrated
+charge manually when appropriate. Only the total-current header in mA is used,
+not a current-density header. Missing or invalid master values are left blank
+and reported; unmatched samples keep their existing inputs. Run Analysis again
+after loading. This lookup only reads the workbook and never copies the MEA repeat.
+
+**First PDA number (1–999)** defaults to 1; type a number or use its up/down
+arrows. A batch starting at 15 produces
+`P005-PDA-015`, `P005-PDA-016`, etc., regardless of the linked MEA numbers.
+Set this explicitly for later batches; exporting does not automatically advance
+it. `Components` stores the full MEA ID; `Project` comes from that ID; `Category`
+is `PDA` and `Label` is `Product analysis`. Numbers are padded to three digits
+and limited to 001–999. When opening CSV in Excel, import `Number` as text to
+retain its leading zeros. This compact report is intended for column-name-based
+import; it is not the full master worksheet layout. AutoCatX import is separate.
+
+FE is in percent; carbon amount is in mmol-C. The regular Results CSV preserves
+the MEA ID, HPLC repeat and name when reopened, and also includes
 these sample totals, repeated on each product row; do not sum those repeated totals.
 Both objectives are also available in the Figure tab's **Right axis** selector.
 

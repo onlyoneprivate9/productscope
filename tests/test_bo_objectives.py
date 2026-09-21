@@ -129,17 +129,17 @@ class BOObjectiveTests(unittest.TestCase):
                                       ('total_charge_c', 'electrolyte_volume_l',
                                        'initial_reactant_concentration_mol_l')}}
             app._refresh_all()
-            app.measurement_table.rows[1]['amount_mol_l'] = ''
+            app.measurement_table.rows[0]['GA'] = ''
             app.run_calculations()
             self.assertIsNone(app.sample_summaries['A'].get('c2_c3_total_fe_pct', 'missing'))
             self.assertIsNone(app.sample_summaries['A'].get('c2_c3_carbon_mmol', 'missing'))
-            app.measurement_table.rows[1]['amount_mol_l'] = '.01'
+            app.measurement_table.rows[0]['GA'] = '.01'
             app._measurement_table_changed()
             app.sample_table.rows[0]['electrolyte_volume_l'] = ''
             app._sample_table_changed()
             app.run_calculations()
             self.assertIsNone(app.sample_summaries['A'].get('c2_c3_carbon_mmol', 'missing'))
-            self.assertEqual(app.bo_objectives_table.rows[0]['c2_c3_carbon_mmol'], '')
+            self.assertIsNone(app.sample_summaries['A']['c2_c3_carbon_mmol'])
         finally:
             root.destroy()
 
@@ -153,7 +153,8 @@ class BOObjectiveTests(unittest.TestCase):
         tk = Tcl()
         app.results = result['rows']
         app.sample_summaries = {row['sample']: row for row in result['sample_summaries']}
-        app.sample_inputs = {'A': {}, 'B': {}}
+        app.sample_inputs = {'A': {'mea_id': 'P005-MEA-004'}, 'B': {'mea_id': 'P005-MEA-009'}}
+        app.pda_start_number = StringVar(tk, value='1')
         app.status_text = StringVar(tk)
         app.plot_right_metric = StringVar(tk, value='C2/C3 total FE (%)')
         self.assertAlmostEqual(app._overlay_values(['A'])[0], 86.6666666667)
@@ -162,14 +163,14 @@ class BOObjectiveTests(unittest.TestCase):
         self.assertAlmostEqual(app._overlay_values(['A'])[0], 7.0)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'objectives.csv'
-            with patch('gui_app.filedialog.asksaveasfilename', return_value=str(path)):
+            with patch.object(app, 'run_calculations'), patch('gui_app.filedialog.asksaveasfilename', return_value=str(path)):
                 app.export_bo_objectives_csv()
             with path.open(newline='') as handle:
                 exported = list(csv.DictReader(handle))
-            self.assertEqual([row['sample'] for row in exported], ['A', 'B'])
-            self.assertAlmostEqual(float(exported[0]['c2_c3_total_fe_pct']), 86.6666666667)
-            self.assertEqual(exported[1]['c2_c3_total_fe_pct'], '')
-            self.assertAlmostEqual(float(exported[1]['c2_c3_carbon_mmol']), 7.0)
+            self.assertEqual([row['ID'] for row in exported], ['P005-PDA-001', 'P005-PDA-002'])
+            self.assertAlmostEqual(float(exported[0]['BO 1 - C2/C3 FE(%)']), 86.6666666667)
+            self.assertEqual(exported[1]['BO 1 - C2/C3 FE(%)'], '')
+            self.assertAlmostEqual(float(exported[1]['BO 2 - C2/C3 carbon produced (mmol-C)']), 7.0)
 
 
 if __name__ == '__main__':
