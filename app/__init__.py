@@ -1,0 +1,1 @@
+"""ProductScope desktop application."""

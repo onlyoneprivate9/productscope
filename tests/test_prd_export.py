@@ -8,12 +8,12 @@ import unittest
 from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from calculations import compute_metrics
-from pda_export import HEADERS, build_pda_rows, read_mea_details, normalize_mea_id
-from table_parser import parse_uploaded_table
+from app.calculations import compute_metrics
+from app.data_io import HEADERS, build_prd_rows, read_mea_details, normalize_mea_id
+from app.data_io import parse_uploaded_table
 
 
-class PDAExportTests(unittest.TestCase):
+class PRDExportTests(unittest.TestCase):
     def test_mea_padding_preserves_meaningful_suffixes(self):
         self.assertEqual(normalize_mea_id(' P05-MEA-1 '), 'P005-MEA-001')
         self.assertEqual(normalize_mea_id('P05-MEA-008-failed'), 'P05-MEA-008-failed')
@@ -53,7 +53,7 @@ class PDAExportTests(unittest.TestCase):
 
     def test_gui_loads_master_details_for_both_hplc_repeats(self):
         from tkinter import Tk
-        from gui_app import ProductScopeApp
+        from app.gui_app import ProductScopeApp
         root = Tk()
         root.withdraw()
         try:
@@ -66,8 +66,8 @@ class PDAExportTests(unittest.TestCase):
             app.sample_table.rows[0]['mea_id'] = 'P05-MEA-009'
             details = {'P005-MEA-009': {'mea_name': 'Conditions', 'total_charge_c': 36,
                 'electrolyte_volume_l': .01, 'initial_reactant_concentration_mol_l': .05}}
-            with patch('gui_app.filedialog.askopenfilename', return_value='master.xlsx'), \
-                    patch('gui_app.read_mea_details', return_value=details):
+            with patch('app.gui_app.filedialog.askopenfilename', return_value='master.xlsx'), \
+                    patch('app.gui_app.read_mea_details', return_value=details):
                 app.load_master_details()
             self.assertEqual([r['hplc_repeat'] for r in app.sample_table.rows], ['repeat1', 'repeat2'])
             self.assertEqual([r['mea_id'] for r in app.measurement_table.rows], ['P005-MEA-009'] * 2)
@@ -79,8 +79,8 @@ class PDAExportTests(unittest.TestCase):
             self.assertEqual([r['GA'] for r in app.measurement_table.rows], original_amounts)
             app.sample_table.rows[0]['mea_id'] = 'P005-MEA-009'
             app._sample_table_changed()
-            self.assertEqual(str(app.pda_number_control.cget('state')), 'normal')
-            app.pda_start_number.set('15')
+            self.assertEqual(str(app.prd_number_control.cget('state')), 'normal')
+            app.prd_start_number.set('15')
             for cfg in app.sample_inputs.values():
                 self.assertEqual(cfg['total_charge_c'], 36)
                 self.assertEqual(cfg['electrolyte_volume_l'], .01)
@@ -90,8 +90,8 @@ class PDAExportTests(unittest.TestCase):
             self.assertEqual(len(app.sample_summaries), 2)
             self.assertTrue(all(s['total_charge_c'] == 36 for s in app.sample_summaries.values()))
             details['P005-MEA-009']['total_charge_c'] = None
-            with patch('gui_app.filedialog.askopenfilename', return_value='master.xlsx'), \
-                    patch('gui_app.read_mea_details', return_value=details):
+            with patch('app.gui_app.filedialog.askopenfilename', return_value='master.xlsx'), \
+                    patch('app.gui_app.read_mea_details', return_value=details):
                 app.load_master_details()
             self.assertEqual(app.sample_table.rows[0]['total_charge_c'], '')
             self.assertEqual(app.sample_summaries, {})
@@ -112,9 +112,9 @@ class PDAExportTests(unittest.TestCase):
     def test_same_mea_repeats_have_separate_values_and_sequential_ids(self):
         parsed = self.parse_repeats()
         result = self.calculate(parsed)
-        rows = build_pda_rows(result['sample_summaries'], parsed['sample_inputs'], '15')
+        rows = build_prd_rows(result['sample_summaries'], parsed['sample_inputs'], '15')
         self.assertEqual(list(rows[0]), HEADERS)
-        self.assertEqual([r['ID'] for r in rows], ['P005-PDA-015', 'P005-PDA-016'])
+        self.assertEqual([r['ID'] for r in rows], ['P005-PRD-015', 'P005-PRD-016'])
         self.assertEqual([r['Number'] for r in rows], ['015', '016'])
         self.assertEqual([r['Repeat'] for r in rows], ['repeat1', 'repeat2'])
         self.assertEqual([r['Components'] for r in rows], ['P005-MEA-009'] * 2)
@@ -126,22 +126,22 @@ class PDAExportTests(unittest.TestCase):
         valid = {'run': {'mea_id': 'P005-MEA-009', 'hplc_repeat': 'repeat1'}}
         for start in ['0', '-1', '1.5', '', '1000']:
             with self.subTest(start=start), self.assertRaises(ValueError):
-                build_pda_rows(summary, valid, start)
-        for cfg in [{'mea_id': 'A'}, {'mea_id': 'P005-PDA-001'},
+                build_prd_rows(summary, valid, start)
+        for cfg in [{'mea_id': 'A'}, {'mea_id': 'P005-PRD-001'},
                     {'mea_id': 'P005-MEA-009', 'hplc_repeat': ''}]:
             with self.subTest(cfg=cfg), self.assertRaises(ValueError):
-                build_pda_rows(summary, {'run': cfg})
+                build_prd_rows(summary, {'run': cfg})
         with self.assertRaises(ValueError):
-            build_pda_rows(summary * 2, valid)
+            build_prd_rows(summary * 2, valid)
         with self.assertRaises(ValueError):
-            build_pda_rows(summary * 2, valid, 999)
+            build_prd_rows(summary * 2, valid, 999)
 
     def test_explicit_source_labels_are_replaced_by_mea_and_repeat(self):
         data = b'sample,mea_id,hplc_repeat,product,amount\nrun1,P005-MEA-004,repeat1,GA,.01\nrun2,P005-MEA-004,repeat2,GA,.02\n'
         parsed = parse_uploaded_table('runs.csv', data)
         self.assertEqual([r['sample'] for r in parsed['rows']],
                          ['P005-MEA-004 [repeat1]', 'P005-MEA-004 [repeat2]'])
-        rows = build_pda_rows(self.calculate(parsed)['sample_summaries'], parsed['sample_inputs'])
+        rows = build_prd_rows(self.calculate(parsed)['sample_summaries'], parsed['sample_inputs'])
         self.assertEqual([r['Components'] for r in rows], ['P005-MEA-004'] * 2)
 
     def test_conflicting_metadata_is_rejected(self):
@@ -156,7 +156,7 @@ class PDAExportTests(unittest.TestCase):
 
     def test_rename_updates_results_plot_selection_and_exports_without_merging(self):
         from tkinter import Tk
-        from gui_app import ProductScopeApp
+        from app.gui_app import ProductScopeApp
         root = Tk()
         root.withdraw()
         try:
@@ -181,7 +181,7 @@ class PDAExportTests(unittest.TestCase):
             self.assertEqual(app._result_row_for_export(app.results[0])['sample'], 'P005-MEA-004')
             app.sample_table.rows[0]['mea_id'] = 'P005-MEA-009'
             app.sample_table.rows[0]['hplc_repeat'] = 'repeat2'
-            with patch('gui_app.messagebox.showerror') as error:
+            with patch('app.gui_app.messagebox.showerror') as error:
                 app._sample_table_changed()
             error.assert_called_once()
             self.assertIn(new_key, app.sample_inputs)
@@ -200,7 +200,7 @@ class PDAExportTests(unittest.TestCase):
 
     def test_gui_export_and_results_roundtrip(self):
         from tkinter import Tk
-        from gui_app import ProductScopeApp
+        from app.gui_app import ProductScopeApp
         root = Tk()
         root.withdraw()
         try:
@@ -212,18 +212,18 @@ class PDAExportTests(unittest.TestCase):
             app._refresh_all()
             app.sample_table.rows[0]['mea_name'] = 'MEA conditions'
             app.sample_table.rows[1]['mea_name'] = 'MEA conditions'
-            app.pda_start_number.set('15')
+            app.prd_start_number.set('15')
             with tempfile.TemporaryDirectory() as directory:
                 bo = Path(directory) / 'bo.csv'
-                with patch('gui_app.filedialog.asksaveasfilename', return_value=str(bo)):
+                with patch('app.gui_app.filedialog.asksaveasfilename', return_value=str(bo)):
                     app.export_bo_objectives_csv()
                 rows = list(csv.DictReader(io.StringIO(bo.read_text())))
-                self.assertEqual(rows[0]['ID'], 'P005-PDA-015')
+                self.assertEqual(rows[0]['ID'], 'P005-PRD-015')
                 self.assertEqual(rows[1]['Repeat'], 'repeat2')
                 self.assertEqual(rows[0]['Name'], 'MEA conditions')
                 self.assertEqual(app.bo_objectives_table.rows[1]['ID'], rows[1]['ID'])
                 results = Path(directory) / 'results.csv'
-                with patch('gui_app.filedialog.asksaveasfilename', return_value=str(results)):
+                with patch('app.gui_app.filedialog.asksaveasfilename', return_value=str(results)):
                     app.export_results_csv()
                 restored = parse_uploaded_table(results.name, results.read_bytes())
                 self.assertEqual(set(restored['sample_inputs']), set(app.sample_inputs))
@@ -239,7 +239,7 @@ class PDAExportTests(unittest.TestCase):
                 # Changing charge immediately before export must update the values.
                 old_fe = float(rows[0][HEADERS[-2]])
                 app.sample_table.rows[0]['total_charge_c'] = '200'
-                with patch('gui_app.filedialog.asksaveasfilename', return_value=str(bo)):
+                with patch('app.gui_app.filedialog.asksaveasfilename', return_value=str(bo)):
                     app.export_bo_objectives_csv()
                 updated = list(csv.DictReader(io.StringIO(bo.read_text())))
                 self.assertAlmostEqual(float(updated[0][HEADERS[-2]]), old_fe / 2)

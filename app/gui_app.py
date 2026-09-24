@@ -32,19 +32,22 @@ except ImportError as exc:  # pragma: no cover - exercised only when deps are mi
         "  python3 -m pip install -r requirements.txt"
     ) from exc
 
-try:
-    from .calculations import compute_metrics
-    from .table_parser import parse_uploaded_table
-    from .pda_export import HEADERS as BO_OBJECTIVE_HEADERS, build_pda_rows, read_mea_details, normalize_mea_id, identity_mapping
-    from .measurement_grid import DEFAULT_PRODUCTS, grid_rows, calculation_rows, product_column
-except ImportError:
-    from calculations import compute_metrics
-    from table_parser import parse_uploaded_table
-    from pda_export import HEADERS as BO_OBJECTIVE_HEADERS, build_pda_rows, read_mea_details, normalize_mea_id, identity_mapping
-    from measurement_grid import DEFAULT_PRODUCTS, grid_rows, calculation_rows, product_column
+from .calculations import compute_metrics
+from .data_io import (
+    HEADERS as BO_OBJECTIVE_HEADERS,
+    DEFAULT_PRODUCTS,
+    build_prd_rows,
+    calculation_rows,
+    grid_rows,
+    identity_mapping,
+    normalize_mea_id,
+    parse_uploaded_table,
+    product_column,
+    read_mea_details,
+)
 
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_LIBRARY_FILE = BASE_DIR / "product_library_template.json"
 
 RESULT_HEADERS = [
@@ -272,8 +275,8 @@ class ProductScopeApp:
         self.sample_summaries: dict[str, dict] = {}
         self.mea_names = {}
         self.mea_details = {}
-        self.pda_start_number = StringVar(value="1")
-        self.pda_preview_note = StringVar(value="")
+        self.prd_start_number = StringVar(value="1")
+        self.prd_preview_note = StringVar(value="")
         # None follows all samples, while an empty set explicitly selects none.
         self.selected_samples: set[str] | None = None
 
@@ -306,7 +309,7 @@ class ProductScopeApp:
 
         self._configure_style()
         self._build_ui()
-        self.pda_start_number.trace_add("write", lambda *_: self._refresh_bo_preview())
+        self.prd_start_number.trace_add("write", lambda *_: self._refresh_bo_preview())
         self._refresh_all()
 
     def _configure_style(self) -> None:
@@ -500,9 +503,9 @@ class ProductScopeApp:
         bo_controls = ttk.Frame(self.results_tab)
         bo_controls.grid(row=2, column=0, sticky="ew", pady=(10, 4))
         ttk.Label(bo_controls, text="BO objectives — maximise C2/C3 FE and carbon produced.").grid(row=0, column=0, columnspan=3, sticky="w")
-        ttk.Label(bo_controls, text="First PDA number (1–999):").grid(row=1, column=0, sticky="w", pady=6)
-        self.pda_number_control = ttk.Spinbox(bo_controls, from_=1, to=999, textvariable=self.pda_start_number, width=8)
-        self.pda_number_control.grid(row=1, column=1, sticky="w", padx=8)
+        ttk.Label(bo_controls, text="First PRD number (1–999):").grid(row=1, column=0, sticky="w", pady=6)
+        self.prd_number_control = ttk.Spinbox(bo_controls, from_=1, to=999, textvariable=self.prd_start_number, width=8)
+        self.prd_number_control.grid(row=1, column=1, sticky="w", padx=8)
         bo_controls.columnconfigure(2, weight=1)
         ttk.Button(bo_controls, text="Export BO Objectives CSV", command=self.export_bo_objectives_csv,
                    style="Primary.TButton").grid(row=1, column=2, sticky="e")
@@ -513,7 +516,7 @@ class ProductScopeApp:
         )
         self.bo_objectives_table.grid(row=3, column=0, sticky="nsew")
         self.bo_objectives_table.tree.unbind("<Double-1>")
-        ttk.Label(self.results_tab, textvariable=self.pda_preview_note, wraplength=1000).grid(
+        ttk.Label(self.results_tab, textvariable=self.prd_preview_note, wraplength=1000).grid(
             row=4, column=0, sticky="w")
 
     def _build_figure_tab(self) -> None:
@@ -896,17 +899,17 @@ class ProductScopeApp:
 
     def _refresh_bo_preview(self) -> None:
         try:
-            rows = build_pda_rows(self.sample_summaries.values(), self.sample_inputs,
-                                  self.pda_start_number.get())
+            rows = build_prd_rows(self.sample_summaries.values(), self.sample_inputs,
+                                  self.prd_start_number.get())
         except ValueError as exc:
             self.bo_objectives_table.load_rows([])
-            self.pda_preview_note.set(str(exc))
+            self.prd_preview_note.set(str(exc))
             return
         for row in rows:
             for key in BO_OBJECTIVE_HEADERS[-2:]:
                 row[key] = _float_text(row[key], 6)
         self.bo_objectives_table.load_rows(rows)
-        self.pda_preview_note.set("PDA numbers follow export order. Set the starting number for each batch.")
+        self.prd_preview_note.set("PRD numbers follow export order. Set the starting number for each batch.")
 
     def _refresh_summary_cards(self) -> None:
         data = self._plot_data()
@@ -1300,10 +1303,10 @@ class ProductScopeApp:
             messagebox.showwarning("No results", "Run calculations before exporting BO objectives.")
             return
         try:
-            rows = build_pda_rows(self.sample_summaries.values(), self.sample_inputs,
-                                  self.pda_start_number.get())
+            rows = build_prd_rows(self.sample_summaries.values(), self.sample_inputs,
+                                  self.prd_start_number.get())
         except ValueError as exc:
-            messagebox.showerror("Cannot export PDA report", str(exc))
+            messagebox.showerror("Cannot export PRD report", str(exc))
             return
         path = filedialog.asksaveasfilename(
             title="Export BO objectives CSV",

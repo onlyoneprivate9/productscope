@@ -11,7 +11,7 @@ from unittest.mock import patch
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_DIR))
 
-from calculations import compute_metrics
+from app.calculations import compute_metrics
 
 
 class BOObjectiveTests(unittest.TestCase):
@@ -118,7 +118,7 @@ class BOObjectiveTests(unittest.TestCase):
         self.assertIsNone(summary.get('c2_c3_carbon_mmol', 'missing'))
 
     def test_blank_gui_measurement_or_volume_leaves_objectives_blank(self):
-        from gui_app import ProductScopeApp
+        from app.gui_app import ProductScopeApp
 
         root = Tk()
         root.withdraw()
@@ -144,7 +144,7 @@ class BOObjectiveTests(unittest.TestCase):
             root.destroy()
 
     def test_bo_csv_and_plot_use_sample_totals(self):
-        from gui_app import ProductScopeApp
+        from app.gui_app import ProductScopeApp
 
         self.measurements += [dict(row, sample='B') for row in self.measurements]
         self.inputs['sample_inputs'] = {'B': {'total_charge_c': 0}}
@@ -154,7 +154,7 @@ class BOObjectiveTests(unittest.TestCase):
         app.results = result['rows']
         app.sample_summaries = {row['sample']: row for row in result['sample_summaries']}
         app.sample_inputs = {'A': {'mea_id': 'P005-MEA-004'}, 'B': {'mea_id': 'P005-MEA-009'}}
-        app.pda_start_number = StringVar(tk, value='1')
+        app.prd_start_number = StringVar(tk, value='1')
         app.status_text = StringVar(tk)
         app.plot_right_metric = StringVar(tk, value='C2/C3 total FE (%)')
         self.assertAlmostEqual(app._overlay_values(['A'])[0], 86.6666666667)
@@ -163,11 +163,11 @@ class BOObjectiveTests(unittest.TestCase):
         self.assertAlmostEqual(app._overlay_values(['A'])[0], 7.0)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'objectives.csv'
-            with patch.object(app, 'run_calculations'), patch('gui_app.filedialog.asksaveasfilename', return_value=str(path)):
+            with patch.object(app, 'run_calculations'), patch('app.gui_app.filedialog.asksaveasfilename', return_value=str(path)):
                 app.export_bo_objectives_csv()
             with path.open(newline='') as handle:
                 exported = list(csv.DictReader(handle))
-            self.assertEqual([row['ID'] for row in exported], ['P005-PDA-001', 'P005-PDA-002'])
+            self.assertEqual([row['ID'] for row in exported], ['P005-PRD-001', 'P005-PRD-002'])
             self.assertAlmostEqual(float(exported[0]['BO 1 - C2/C3 FE(%)']), 86.6666666667)
             self.assertEqual(exported[1]['BO 1 - C2/C3 FE(%)'], '')
             self.assertAlmostEqual(float(exported[1]['BO 2 - C2/C3 carbon produced (mmol-C)']), 7.0)

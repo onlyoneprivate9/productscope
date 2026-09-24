@@ -8,18 +8,18 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from measurement_grid import calculation_rows, grid_rows
-from table_parser import parse_uploaded_table
+from app.data_io import calculation_rows, grid_rows
+from app.data_io import parse_uploaded_table
 
 
 class WideInputTests(unittest.TestCase):
     def test_product_choices_persist(self):
         from tkinter import Tk, Toplevel, ttk
-        from gui_app import ProductScopeApp
+        from app.gui_app import ProductScopeApp
         root = Tk()
         root.withdraw()
         try:
-            with tempfile.TemporaryDirectory() as directory, patch('gui_app.BASE_DIR', Path(directory)):
+            with tempfile.TemporaryDirectory() as directory, patch('app.gui_app.BASE_DIR', Path(directory)):
                 app = ProductScopeApp(root)
                 app.choose_input_products()
                 dialog = next(w for w in root.winfo_children() if isinstance(w, Toplevel))
@@ -60,7 +60,7 @@ class WideInputTests(unittest.TestCase):
 
     def test_gui_add_repeat_paste_export_reload_and_delete(self):
         from tkinter import Tk
-        from gui_app import ProductScopeApp
+        from app.gui_app import ProductScopeApp
         root = Tk()
         root.withdraw()
         try:
@@ -68,7 +68,7 @@ class WideInputTests(unittest.TestCase):
             app._set_product_columns(['Glycerol', 'Glycolic acid'])
             app.mea_details = {'P005-MEA-014': {'mea_name': 'Conditions', 'total_charge_c': 28.8,
                 'electrolyte_volume_l': .01, 'initial_reactant_concentration_mol_l': .05}}
-            with patch('gui_app.simpledialog.askstring', return_value='P005-MEA-014'):
+            with patch('app.gui_app.simpledialog.askstring', return_value='P005-MEA-014'):
                 app.add_measurement()
             self.assertEqual(len(app.measurement_table.rows), 1)
             self.assertEqual(app.measurement_table.rows[0]['Glycolic acid'], '')
@@ -82,19 +82,19 @@ class WideInputTests(unittest.TestCase):
             self.assertEqual(app.measurement_table.rows[0]['Glycolic acid'], '0')
             self.assertEqual(app.measurement_table.rows[1]['Glycerol'], '')
             before = [dict(r) for r in app.measurement_table.rows]
-            with patch.object(root, 'clipboard_get', return_value='bad\t0'), patch('gui_app.messagebox.showerror') as error:
+            with patch.object(root, 'clipboard_get', return_value='bad\t0'), patch('app.gui_app.messagebox.showerror') as error:
                 app.paste_measurements()
             error.assert_called_once()
             self.assertEqual(before, app.measurement_table.rows)
             with tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / 'input.csv'
-                with patch('gui_app.filedialog.asksaveasfilename', return_value=str(path)):
+                with patch('app.gui_app.filedialog.asksaveasfilename', return_value=str(path)):
                     app.export_input_csv()
                 exported = list(csv.DictReader(io.StringIO(path.read_text(encoding='utf-8-sig'))))
                 self.assertEqual(len(exported), 2)
                 self.assertEqual(exported[0]['Glycolic acid'], '0')
                 self.assertEqual(exported[1]['Glycerol'], '')
-                with patch('gui_app.filedialog.askopenfilename', return_value=str(path)):
+                with patch('app.gui_app.filedialog.askopenfilename', return_value=str(path)):
                     app.load_data_file()
                 self.assertEqual(app.measurement_table.rows[1]['Glycerol'], '')
                 self.assertEqual(app.sample_inputs['P005-MEA-014 [repeat1]']['mea_name'], 'Conditions')

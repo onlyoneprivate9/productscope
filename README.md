@@ -53,8 +53,24 @@ Launch_ProductScope.bat
 You can also run the GUI directly:
 
 ```bash
-python3 gui_app.py
+python3 -m app.gui_app
 ```
+
+The launchers prefer the project's `.venv` environment when available.
+On Windows, you can run that environment directly:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.gui_app
+```
+
+## Folder Layout
+
+- `app/`: interface (`gui_app.py`), calculations (`calculations.py`), combined data handling (`data_io.py`), and dependency checks (`check_gui_dependencies.py`).
+- `tests/`: automated checks, grouped by feature.
+- `Launch_ProductScope.bat` / `launch_productscope.command`: Windows and macOS launchers.
+- `product_library_template.json`: default product definitions.
+- `input_preferences.json`: saved local preferences.
+- `requirements.txt`: Python dependencies.
 
 ## Data File Format
 
@@ -140,7 +156,7 @@ concentrations across columns. All concentration cells use **mol/L**.
 
 A blank cell means **not entered**, while `0` means a measured zero. Missing
 target-product concentrations leave the associated BO objective unavailable.
-The detailed Results CSV and PDA BO report retain their respective formats.
+The detailed Results CSV and PRD BO report retain their respective formats.
 
 Example input CSV:
 
@@ -166,7 +182,7 @@ It is distinct from reactant-depletion carbon conversion and the existing carbon
 balance. At the same product concentrations, doubling electrolyte volume doubles
 this objective. Reactants, including unreacted glycerol, are excluded.
 
-After **Run Analysis**, the Results tab previews the PDA report. **Export BO
+After **Run Analysis**, the Results tab previews the PRD report. **Export BO
 Objectives CSV** recalculates the current inputs and exports one row per HPLC
 sample, in input order, with columns:
 
@@ -210,12 +226,12 @@ not a current-density header. Missing or invalid master values are left blank
 and reported; unmatched samples keep their existing inputs. Run Analysis again
 after loading. This lookup only reads the workbook and never copies the MEA repeat.
 
-**First PDA number (1–999)** defaults to 1; type a number or use its up/down
+**First PRD number (1–999)** defaults to 1; type a number or use its up/down
 arrows. A batch starting at 15 produces
-`P005-PDA-015`, `P005-PDA-016`, etc., regardless of the linked MEA numbers.
+`P005-PRD-015`, `P005-PRD-016`, etc., regardless of the linked MEA numbers.
 Set this explicitly for later batches; exporting does not automatically advance
 it. `Components` stores the full MEA ID; `Project` comes from that ID; `Category`
-is `PDA` and `Label` is `Product analysis`. Numbers are padded to three digits
+is `PRD` and `Label` is `Product analysis`. Numbers are padded to three digits
 and limited to 001–999. When opening CSV in Excel, import `Number` as text to
 retain its leading zeros. This compact report is intended for column-name-based
 import; it is not the full master worksheet layout. AutoCatX import is separate.
@@ -273,7 +289,7 @@ python3 -m unittest discover -s tests -v
 Run syntax checks:
 
 ```bash
-python3 -m py_compile gui_app.py calculations.py table_parser.py check_gui_dependencies.py
+python3 -m compileall -q app
 ```
 
 ## GitHub

@@ -8,7 +8,7 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from gui_app import ProductScopeApp
+from app.gui_app import ProductScopeApp
 
 
 class PlotControlTests(unittest.TestCase):

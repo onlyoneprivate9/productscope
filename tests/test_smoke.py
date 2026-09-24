@@ -12,8 +12,8 @@ import pandas as pd
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_DIR))
 
-from calculations import compute_metrics
-from table_parser import parse_uploaded_table
+from app.calculations import compute_metrics
+from app.data_io import parse_uploaded_table
 
 
 class ProductScopeSmokeTests(unittest.TestCase):
